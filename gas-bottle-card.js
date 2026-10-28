@@ -1,14 +1,46 @@
+{ // bloc isolé : aucune variable ne fuit vers les autres cartes
 /*
  * Gas Bottle Card (FR)
  * Carte Home Assistant pour une bouteille de gaz pesée (balance ESPHome) : bouteille illustrée qui se vide, pourcentage,
  * kilos restants, couleur selon le seuil, estimation du temps restant d'après l'historique et alerte de mesure incohérente.
  * Style verre, thème clair/sombre automatique, éditeur visuel, textes en français.
  */
-const CARD_VERSION = "1.0.0";
+const CARD_VERSION = "1.1.0";
+
+/* === NUANCE COMMUNE v2 (cartes Johan854) ===
+ * Bloc identique dans toutes les cartes. Options : nuance, nuance_perso, intensite.
+ * nuance "theme" (par défaut) : suit la variable carte-nuance du thème Home Assistant ;
+ * si elle n'existe pas, la carte garde ses couleurs d'origine. Intensité : 0 = neutre, 1 = normal, 2 = très coloré. */
+const GV_NUANCES = [["braise", "Braise (rouge)", "#e0524f"], ["ocean", "Océan (bleu)", "#2f8fd8"], ["lagon", "Lagon (turquoise)", "#1fb5a8"], ["foret", "Forêt (vert)", "#3fae5a"], ["lavande", "Lavande (violet)", "#8a63d8"], ["framboise", "Framboise (rose)", "#e05597"], ["ambre", "Ambre (orange)", "#e8902c"], ["ardoise", "Ardoise (neutre)", "#7d8595"]];
+const GV_DEFAULTS = { nuance: "theme", intensite: 1 };
+const gvAccent = (c) => {
+  const p = c && c.nuance_perso;
+  if (c && c.nuance === "perso") {
+    if (Array.isArray(p) && p.length === 3) return "#" + p.map((v) => Math.max(0, Math.min(255, Math.round(+v || 0))).toString(16).padStart(2, "0")).join("");
+    if (typeof p === "string" && /^#?[0-9a-f]{6}$/i.test(p.trim())) return "#" + p.trim().replace("#", "");
+  }
+  const n = GV_NUANCES.find((x) => x[0] === (c && c.nuance));
+  return n ? n[2] : "var(--carte-nuance)";
+};
+/* Variables posées sur <ha-card> : --g-bg-x (fond dégradé teinté) et --acc-ui-x (couleur d'accent).
+ * Sans nuance (thème sans carte-nuance), elles sont invalides : chaque carte retombe alors sur ses couleurs d'origine. */
+const gvStyle = (c, dark) => {
+  const i = Number(c && c.intensite), ai = Number.isFinite(i) ? Math.max(0, Math.min(2, i)) : 1;
+  const m = (pct, base) => `color-mix(in srgb,var(--acc-ui) ${+(pct * ai).toFixed(1)}%,${base})`;
+  const bg = dark ? `linear-gradient(160deg,${m(5, "#1b1e32")} 0%,${m(11, "#1f1b2c")} 55%,${m(22, "#1c1620")} 100%)`
+    : `linear-gradient(160deg,${m(2, "#f8f9fd")} 0%,${m(5, "#eef1f8")} 55%,${m(11, "#f8f8fa")} 100%)`;
+  return `--acc-ui:${gvAccent(c)};--g-bg-x:${bg};--acc-ui-x:color-mix(in srgb,var(--acc-ui) ${dark ? "80%,#fff" : "82%,#000"})`;
+};
+const GV_FIELDS = [
+  { name: "nuance", selector: { select: { mode: "dropdown", options: [{ value: "theme", label: "Selon le thème (couleurs d'origine)" }, ...GV_NUANCES.map((n) => ({ value: n[0], label: n[1] })), { value: "perso", label: "Personnalisée" }] } } },
+  { name: "nuance_perso", selector: { color_rgb: {} } },
+  { name: "intensite", selector: { number: { min: 0, max: 2, step: 0.1, mode: "slider" } } }];
+const GV_LABELS = { nuance: "Nuance de couleur", nuance_perso: "Couleur personnalisée (nuance « Personnalisée »)", intensite: "Intensité de la nuance" };
+/* === FIN NUANCE COMMUNE === */
 
 const DEFAULTS = {
   title: "Bouteille de gaz",
-  theme: "auto",
+  theme: "auto", nuance: "theme", intensite: 1,
   entity: "",
   kg_entity: "",
   capacity_kg: 6,
@@ -163,9 +195,9 @@ class GasBottleCard extends HTMLElement {
 
     this.shadowRoot.innerHTML = `<style>
       * { box-sizing:border-box; }
-      ha-card.dark { --gb-text:#f4f6fb; --gb-muted:#a9afc0; --gb-bg:linear-gradient(160deg,#1b1e32 0%,#241a2a 55%,#2d1519 100%); --gb-border:rgba(255,255,255,.14); --gb-shadow:0 .6em 2em rgba(0,0,0,.35);
+      ha-card.dark { --gb-text:#f4f6fb; --gb-muted:#a9afc0; --gb-bg:var(--g-bg-x,linear-gradient(160deg,#1b1e32 0%,#241a2a 55%,#2d1519 100%)); --gb-border:rgba(255,255,255,.14); --gb-shadow:0 .6em 2em rgba(0,0,0,.35);
         --gb-glass:rgba(255,255,255,.07); --gb-glass-b:rgba(255,255,255,.13); --gb-ok:#3ddc84; --gb-mid:#4aa8ff; --gb-crit:#ff5a5f; --gb-warn:#ffb86b; --gb-na:#8a90a2; --gb-shell:rgba(255,255,255,.1); --gb-metal:#7b8196; }
-      ha-card.light { --gb-text:#1c2030; --gb-muted:#5d6477; --gb-bg:linear-gradient(160deg,#f8f9fd 0%,#eef1f8 55%,#f8eff0 100%); --gb-border:rgba(20,24,40,.12); --gb-shadow:0 .4em 1.4em rgba(20,24,40,.12);
+      ha-card.light { --gb-text:#1c2030; --gb-muted:#5d6477; --gb-bg:var(--g-bg-x,linear-gradient(160deg,#f8f9fd 0%,#eef1f8 55%,#f8eff0 100%)); --gb-border:rgba(20,24,40,.12); --gb-shadow:0 .4em 1.4em rgba(20,24,40,.12);
         --gb-glass:rgba(255,255,255,.7); --gb-glass-b:rgba(20,24,40,.1); --gb-ok:#1a9d55; --gb-mid:#1f78d1; --gb-crit:#d32f35; --gb-warn:#c77a14; --gb-na:#8a90a2; --gb-shell:rgba(20,24,40,.06); --gb-metal:#9aa1b5; }
       ha-card { position:relative; container-type:inline-size; display:flex; flex-direction:column; gap:12px; padding:16px; color:var(--gb-text); border-radius:24px; border:1px solid var(--gb-border); background:var(--gb-bg); box-shadow:var(--gb-shadow); overflow:hidden; }
       ha-card > * { position:relative; }
@@ -195,7 +227,7 @@ class GasBottleCard extends HTMLElement {
       @keyframes gb-p { 50% { box-shadow:0 0 0 3px color-mix(in srgb, var(--gb-crit) 30%, transparent); } }
       @media (prefers-reduced-motion: reduce) { .wv, .wv2, .al.crit { animation:none; } .liq { transition:none; } }
     </style>
-    <ha-card class="${dark ? "dark" : "light"}">${bg}
+    <ha-card class="${dark ? "dark" : "light"}" style="${gvStyle(this._config, dark)}">${bg}
       ${c.title ? `<div class="t">${esc(c.title)}</div>` : ""}
       <button class="main" data-more="${esc(c.entity)}"><div class="bwrap">${bottle}</div>
         <div class="info ${lvl}"><div class="big">${big}</div><div class="sub">${esc(sub)}</div></div></button>
@@ -206,12 +238,12 @@ class GasBottleCard extends HTMLElement {
 }
 
 /* ---------- Éditeur visuel ---------- */
-const LABELS = { title: "Titre", theme: "Thème", entity: "Capteur de la bouteille (%)", kg_entity: "Capteur en kg (facultatif)", capacity_kg: "Contenance de gaz (kg)",
+const LABELS = { ...GV_LABELS, title: "Titre", theme: "Thème", entity: "Capteur de la bouteille (%)", kg_entity: "Capteur en kg (facultatif)", capacity_kg: "Contenance de gaz (kg)",
   good_kg: "Niveau « bon » au-dessus de (kg)", low_kg: "Niveau « critique » sous (kg)", history_days: "Jours d'historique pour l'estimation", show_estimate: "Afficher le temps restant estimé",
   image: "Image de fond (URL, facultatif)", image_opacity: "Opacité de l'image" };
 const SCHEMA = [
   { type: "grid", name: "", schema: [{ name: "title", selector: { text: {} } },
-    { name: "theme", selector: { select: { mode: "dropdown", options: [{ value: "auto", label: "Automatique" }, { value: "light", label: "Clair" }, { value: "dark", label: "Sombre" }] } } }] },
+    { name: "theme", selector: { select: { mode: "dropdown", options: [{ value: "auto", label: "Automatique" }, { value: "light", label: "Clair" }, { value: "dark", label: "Sombre" }] } } }, ...GV_FIELDS] },
   { name: "entity", selector: { entity: { domain: "sensor" } } },
   { name: "kg_entity", selector: { entity: { domain: "sensor" } } },
   { type: "grid", name: "", schema: [{ name: "capacity_kg", selector: { number: { min: 1, max: 50, step: 0.5, mode: "box" } } },
@@ -248,3 +280,4 @@ customElements.define("gas-bottle-card-editor", GasBottleCardEditor);
 window.customCards = window.customCards || [];
 window.customCards.push({ type: "gas-bottle-card", name: "Gas Bottle Card (FR)", description: "Bouteille de gaz pesée : niveau animé, kg restants, temps restant estimé, alerte de mesure incohérente.", preview: true });
 console.info(`%c GAS-BOTTLE-CARD %c v${CARD_VERSION} `, "color:#fff;background:#1f78d1;font-weight:700;border-radius:3px 0 0 3px;padding:2px 4px", "color:#1f78d1;background:#fff;font-weight:700;border-radius:0 3px 3px 0;padding:2px 4px");
+}
