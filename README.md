@@ -1,6 +1,6 @@
 # Gas Bottle Card (FR)
 
-Carte Home Assistant pour une bouteille de gaz pesée (balance ESP32 + HX711, ESPHome…) : bouteille illustrée qui se vide, pourcentage, kilos restants, couleur selon le niveau (vert / bleu / rouge), **estimation du temps restant** d'après l'historique et **alerte de mesure incohérente** (valeur hors 0–100 %, capteur hors ligne). Style verre, thème clair/sombre automatique, éditeur visuel, textes en français.
+Carte Home Assistant pour une bouteille de gaz pesée (balance ESP32 + HX711, ESPHome…) : bouteille illustrée qui se vide, pourcentage, kilos restants, couleur selon le niveau (vert / bleu / rouge), **estimation du temps restant** d'après l'historique et **alerte de mesure incohérente** (valeur hors 0–100 %, capteur hors ligne) et **onglet Réglages** pour tarer et calibrer la balance depuis la carte. Style verre, thème clair/sombre automatique, éditeur visuel, textes en français.
 
 ## Installation (HACS)
 1. HACS → ⋮ → *Dépôts personnalisés* → `https://github.com/Johan854/gas-bottle-card`, catégorie **Tableau de bord**.
@@ -12,7 +12,7 @@ type: custom:gas-bottle-card
 title: Bouteille de gaz
 entity: sensor.espgaz_gaz        # pourcentage restant
 kg_entity: sensor.espgaz_gaz_restant   # facultatif : kilos restants
-capacity_kg: 6                   # contenance de gaz (hors bouteille vide)
+capacity_kg: 5.5                 # contenance de gaz (ignorée si le réglage « Contenance gaz » de l'ESP existe)
 good_kg: 4                       # vert au-dessus
 low_kg: 2                        # rouge en dessous (bleu entre les deux)
 show_estimate: true
@@ -21,6 +21,29 @@ image: /local/gaz/bouteille.jpg  # facultatif, image de fond
 image_opacity: 0.18
 ```
 L'estimation ne compte que les baisses du niveau (les hausses sont ignorées : dérive ou changement de bouteille) et demande au moins 24 h d'historique fiable. Un clic sur la carte ouvre la fiche du capteur.
+
+## Onglet Réglages (calibration de la balance)
+
+En haut à droite, deux onglets : **Niveau** (la bouteille) et **Réglages** :
+
+- poids actuellement lu par la balance ;
+- **tare** de la bouteille vide et **contenance** de gaz, réglables avec − / + ;
+- calibration en deux étapes, chaque bouton demandant une confirmation (deuxième appui) :
+  1. plateau vide → **Tarer** ;
+  2. bouteille vide posée → **Calibrer**.
+
+Les entités sont détectées automatiquement (en priorité celles du même appareil que `entity`) d'après les noms de la config ESPHome : `button.*tarer*`, `button.*calibr*`, `number.*tare_bouteille*`, `number.*contenance*`, `sensor.*poids_total*`. On peut aussi les donner à la main :
+
+```yaml
+show_settings: true
+weight_entity: sensor.espgaz_poids_total_bouteille
+tare_button: button.espgaz_tarer_plateau_vide
+calib_button: button.espgaz_calibrer_avec_bouteille_vide
+tare_number: number.espgaz_tare_bouteille
+capacity_number: number.espgaz_contenance_gaz
+```
+
+Sans aucune de ces entités, l'onglet n'apparaît pas.
 
 ## Apparence : nuance de couleur
 
@@ -44,4 +67,5 @@ Sans cette ligne, `nuance: theme` garde les couleurs d'origine de la carte.
 
 ## Historique des versions
 
+- **1.2.0** : onglet Réglages (tare, calibration avec confirmation, tare et contenance réglables) ; la contenance suit le réglage de l'ESP s'il existe.
 - **1.1.0** : nuance de couleur au choix (8 nuances, couleur personnalisée, intensité, ou nuance commune via `carte-nuance` dans le thème).

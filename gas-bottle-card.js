@@ -5,7 +5,7 @@
  * kilos restants, couleur selon le seuil, estimation du temps restant d'après l'historique et alerte de mesure incohérente.
  * Style verre, thème clair/sombre automatique, éditeur visuel, textes en français.
  */
-const CARD_VERSION = "1.1.0";
+const CARD_VERSION = "1.2.0";
 
 /* === NUANCE COMMUNE v2 (cartes Johan854) ===
  * Bloc identique dans toutes les cartes. Options : nuance, nuance_perso, intensite.
@@ -50,7 +50,18 @@ const DEFAULTS = {
   show_estimate: true,
   image: "",
   image_opacity: 0.18,
+  show_settings: true,
 };
+
+/* Entités de réglage de la balance (onglet « Réglages ») : détectées automatiquement si non renseignées.
+ * Noms prévus pour la config ESPHome esp-gaz (Tarer plateau vide, Calibrer avec bouteille vide, Tare bouteille, Contenance gaz, Poids total bouteille). */
+const SET_KEYS = [
+  ["weight_entity", /^sensor\..*poids_total/],
+  ["tare_button", /^button\..*tarer/],
+  ["calib_button", /^button\..*calibr/],
+  ["tare_number", /^number\..*tare_bouteille/],
+  ["capacity_number", /^number\..*contenance/],
+];
 
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const gone = (st) => !st || st.state === "unavailable" || st.state === "unknown" || st.state === "";
@@ -63,22 +74,72 @@ class GasBottleCard extends HTMLElement {
     return { ...DEFAULTS, entity: id || "" };
   }
 
-  constructor() { super(); this.attachShadow({ mode: "open" }); this._sig = ""; this._hist = null; this._histAt = 0; }
+  constructor() { super(); this.attachShadow({ mode: "open" }); this._sig = ""; this._hist = null; this._histAt = 0; this._tab = "niveau"; this._confirm = null; this._done = null; }
 
   setConfig(config) {
     if (!config) throw new Error("Configuration invalide");
     this._config = { ...DEFAULTS, ...config };
-    this._sig = ""; this._hist = null; this._histAt = 0;
+    this._sig = ""; this._hist = null; this._histAt = 0; this._seCache = null;
     if (this._hass) { this._render(); this._loadHistory(); }
   }
 
   set hass(hass) {
     this._hass = hass;
     if (!this._config) return;
-    const c = this._config;
-    const sig = [c.entity, c.kg_entity].map((e) => { const s = hass.states[e]; return s ? s.state : "x"; }).join("|") + (this._isDark() ? "d" : "l");
-    if (sig !== this._sig) { this._sig = sig; this._render(); }
+    this._sigCheck();
     this._loadHistory();
+  }
+
+  _sigCheck(force) {
+    const c = this._config, hass = this._hass;
+    if (!c || !hass) return;
+    const se = this._setEnts();
+    const ids = [c.entity, c.kg_entity, ...Object.values(se)];
+    const sig = ids.map((e) => { const s = hass.states[e]; return s ? s.state : "x"; }).join("|") + (this._isDark() ? "d" : "l") + this._tab + (this._confirm || "") + (this._done || "");
+    if (force || sig !== this._sig) { this._sig = sig; this._render(); }
+  }
+
+  /* Entités de réglage : config explicite, sinon détection (en priorité celles du même appareil que le capteur principal). */
+  _setEnts() {
+    const c = this._config, h = this._hass, out = {};
+    if (!c || !h) return out;
+    const sc = this._seCache;
+    if (sc && Date.now() - sc.at < 60000 && Object.keys(sc.val).length) return sc.val;
+    const ids = Object.keys(h.states);
+    const pre = (c.entity && c.entity.includes(".")) ? c.entity.split(".")[1].split("_")[0] + "_" : "";
+    SET_KEYS.forEach(([k, re]) => {
+      if (c[k]) { out[k] = c[k]; return; }
+      const all = ids.filter((e) => re.test(e));
+      const same = pre ? all.find((e) => e.split(".")[1].startsWith(pre)) : null;
+      if (same || all[0]) out[k] = same || all[0];
+    });
+    this._seCache = { at: Date.now(), val: out };
+    return out;
+  }
+
+  _flash(kind, key, ms) {
+    this[kind] = key; this._sigCheck(true);
+    clearTimeout(this["_t" + kind]);
+    this["_t" + kind] = setTimeout(() => { this[kind] = null; this._sigCheck(true); }, ms);
+  }
+
+  _press(key) {
+    const id = this._setEnts()[key];
+    if (!id) return;
+    if (this._confirm !== key) { this._flash("_confirm", key, 5000); return; }
+    clearTimeout(this["_t_confirm"]); this._confirm = null;
+    this._hass.callService("button", "press", { entity_id: id });
+    this._flash("_done", key, 4000);
+  }
+
+  _step(key, delta) {
+    const id = this._setEnts()[key], st = id && this._hass.states[id];
+    if (gone(st)) return;
+    const a = st.attributes || {}, step = Number(a.step) || 0.1;
+    let v = Number(st.state) + delta * step;
+    if (isFinite(Number(a.min))) v = Math.max(Number(a.min), v);
+    if (isFinite(Number(a.max))) v = Math.min(Number(a.max), v);
+    this._hass.callService("number", "set_value", { entity_id: id, value: Math.round(v * 100) / 100 });
   }
 
   getCardSize() { return 4; }
@@ -132,7 +193,9 @@ class GasBottleCard extends HTMLElement {
   _read() {
     const c = this._config, h = this._hass;
     const st = h.states[c.entity], kst = c.kg_entity ? h.states[c.kg_entity] : null;
-    const cap = Number(c.capacity_kg) || 6;
+    const capId = this._setEnts().capacity_number, capSt = capId ? h.states[capId] : null;
+    const capEsp = capSt && !gone(capSt) ? Number(capSt.state) : NaN;
+    const cap = isFinite(capEsp) && capEsp > 0 ? capEsp : (Number(c.capacity_kg) || 6);
     if (!c.entity) return { err: "config" };
     if (gone(st) && (!kst || gone(kst))) return { err: "off" };
     const raw = gone(st) ? NaN : Number(st.state);
@@ -173,6 +236,34 @@ class GasBottleCard extends HTMLElement {
         else est = `<div class="est glass"><ha-icon icon="mdi:timer-sand"></ha-icon><div><div class="e1">Estimation indisponible</div><div class="e2">Pas assez de données fiables dans l'historique.</div></div></div>`;
       }
     }
+
+    /* Onglet Réglages */
+    const se = this._setEnts();
+    const hasSet = c.show_settings !== false && Object.keys(se).length > 0;
+    if (!hasSet && this._tab !== "niveau") this._tab = "niveau";
+    const val = (id, d) => { const s = id && h.states[id]; return gone(s) || !isFinite(Number(s.state)) ? "—" : fmt(Number(s.state), d); };
+    const tabs = hasSet ? `<div class="tabs glass" role="tablist">
+        <button class="tab ${this._tab === "niveau" ? "on" : ""}" data-tab="niveau" role="tab"><ha-icon icon="mdi:gas-cylinder"></ha-icon>Niveau</button>
+        <button class="tab ${this._tab === "reglages" ? "on" : ""}" data-tab="reglages" role="tab"><ha-icon icon="mdi:tune-variant"></ha-icon>Réglages</button></div>` : "";
+    const actBtn = (key, label, icon) => {
+      if (!se[key]) return "";
+      const st = this._confirm === key ? "confirm" : this._done === key ? "done" : "";
+      const txt = st === "confirm" ? "Confirmer ?" : st === "done" ? "Envoyé ✓" : label;
+      const ic = st === "done" ? "mdi:check" : st === "confirm" ? "mdi:alert-circle-outline" : icon;
+      return `<button class="act ${st}" data-press="${key}"><ha-icon icon="${ic}"></ha-icon>${txt}</button>`;
+    };
+    const numRow = (key, label, icon) => se[key] ? `<div class="nrow glass"><ha-icon icon="${icon}"></ha-icon>
+        <button class="nl" data-more="${esc(se[key])}">${label}</button>
+        <div class="stp"><button class="sb" data-step="${key}|-1" aria-label="Moins">−</button><span class="nv">${val(se[key], 1)} kg</span><button class="sb" data-step="${key}|1" aria-label="Plus">+</button></div></div>` : "";
+    const settings = `<div class="set">
+        ${se.weight_entity ? `<button class="wt glass" data-more="${esc(se.weight_entity)}"><ha-icon icon="mdi:scale"></ha-icon><div><div class="e2">Poids sur la balance</div><div class="wval">${val(se.weight_entity, 2)} <small>kg</small></div></div></button>` : ""}
+        ${numRow("tare_number", "Tare bouteille (vide)", "mdi:gas-cylinder")}
+        ${numRow("capacity_number", "Contenance de gaz", "mdi:fire")}
+        ${se.tare_button || se.calib_button ? `<div class="cal glass"><div class="e1">Calibration</div>
+          ${se.tare_button ? `<div class="cstep"><span class="n">1</span><div class="ct">Retire tout du plateau, attends 10 s.</div>${actBtn("tare_button", "Tarer", "mdi:scale-balance")}</div>` : ""}
+          ${se.calib_button ? `<div class="cstep"><span class="n">2</span><div class="ct">Pose une bouteille <b>vide</b> (tare ci-dessus), attends 10 s.</div>${actBtn("calib_button", "Calibrer", "mdi:tune-variant")}</div>` : ""}
+          <div class="e2">Chaque bouton demande une confirmation. Le réglage reste en mémoire dans la balance.</div></div>` : ""}
+      </div>`;
 
     const p = r.pct == null ? 0 : r.pct;
     const bg = c.image ? `<div class="bgimg" style="background-image:url('${esc(c.image)}');opacity:${Number(c.image_opacity) || 0.18}"></div>` : "";
@@ -225,22 +316,51 @@ class GasBottleCard extends HTMLElement {
       .al.warn ha-icon { color:var(--gb-warn); } .al.mid ha-icon { color:var(--gb-mid); } .al.crit ha-icon { color:var(--gb-crit); }
       .al.crit { border-color:var(--gb-crit); animation:gb-p 2s ease-in-out infinite; }
       @keyframes gb-p { 50% { box-shadow:0 0 0 3px color-mix(in srgb, var(--gb-crit) 30%, transparent); } }
-      @media (prefers-reduced-motion: reduce) { .wv, .wv2, .al.crit { animation:none; } .liq { transition:none; } }
+      .hd { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
+      .tabs { display:flex; gap:4px; padding:3px; border-radius:999px; }
+      .tab { display:flex; align-items:center; gap:.35em; padding:5px 12px; border-radius:999px; font-size:.85em; font-weight:600; color:var(--gb-muted); }
+      .tab ha-icon { --mdc-icon-size:1.1em; }
+      .tab.on { color:#fff; background:var(--acc-ui-x,var(--gb-mid)); }
+      .set { display:flex; flex-direction:column; gap:10px; }
+      .wt, .nrow, .cal { display:flex; align-items:center; gap:.7em; padding:10px 14px; border-radius:18px; width:100%; }
+      .wt ha-icon, .nrow > ha-icon { color:var(--gb-muted); }
+      .wval { font-size:1.6em; font-weight:800; font-variant-numeric:tabular-nums; } .wval small { font-size:.55em; font-weight:700; }
+      .nl { flex:1; min-width:0; font-weight:600; font-size:.92em; }
+      .stp { display:flex; align-items:center; gap:6px; }
+      .sb { width:32px; height:32px; border-radius:50%; display:grid; place-items:center; text-align:center; font-size:1.2em; font-weight:700; background:var(--gb-glass); border:1px solid var(--gb-glass-b); }
+      .sb:active { transform:scale(.92); }
+      .nv { min-width:4.2em; text-align:center; font-weight:700; font-variant-numeric:tabular-nums; }
+      .cal { flex-direction:column; align-items:stretch; gap:10px; }
+      .cstep { display:flex; align-items:center; gap:.7em; }
+      .n { flex:none; width:1.6em; height:1.6em; border-radius:50%; display:grid; place-items:center; font-size:.8em; font-weight:800; color:#fff; background:var(--acc-ui-x,var(--gb-mid)); }
+      .ct { flex:1; min-width:0; font-size:.9em; }
+      .act { flex:none; display:flex; align-items:center; gap:.35em; padding:7px 14px; border-radius:999px; font-weight:700; font-size:.88em; color:#fff; background:var(--acc-ui-x,var(--gb-mid)); transition:background .2s; }
+      .act ha-icon { --mdc-icon-size:1.1em; }
+      .act.confirm { background:var(--gb-warn); animation:gb-p2 1s ease-in-out infinite; }
+      .act.done { background:var(--gb-ok); }
+      @keyframes gb-p2 { 50% { box-shadow:0 0 0 3px color-mix(in srgb, var(--gb-warn) 35%, transparent); } }
+      @media (prefers-reduced-motion: reduce) { .wv, .wv2, .al.crit, .act.confirm { animation:none; } .liq { transition:none; } }
     </style>
     <ha-card class="${dark ? "dark" : "light"}" style="${gvStyle(this._config, dark)}">${bg}
-      ${c.title ? `<div class="t">${esc(c.title)}</div>` : ""}
-      <button class="main" data-more="${esc(c.entity)}"><div class="bwrap">${bottle}</div>
+      ${c.title || tabs ? `<div class="hd">${c.title ? `<div class="t">${esc(c.title)}</div>` : "<span></span>"}${tabs}</div>` : ""}
+      ${this._tab === "reglages" ? settings : `<button class="main" data-more="${esc(c.entity)}"><div class="bwrap">${bottle}</div>
         <div class="info ${lvl}"><div class="big">${big}</div><div class="sub">${esc(sub)}</div></div></button>
-      ${alert}${est}
+      ${alert}${est}`}
     </ha-card>`;
-    this.shadowRoot.querySelectorAll("[data-more]").forEach((el) => el.addEventListener("click", () => this._more(el.dataset.more)));
+    const sr = this.shadowRoot;
+    sr.querySelectorAll("[data-more]").forEach((el) => el.addEventListener("click", () => this._more(el.dataset.more)));
+    sr.querySelectorAll("[data-tab]").forEach((el) => el.addEventListener("click", () => { this._tab = el.dataset.tab; this._confirm = null; this._sigCheck(true); }));
+    sr.querySelectorAll("[data-press]").forEach((el) => el.addEventListener("click", () => this._press(el.dataset.press)));
+    sr.querySelectorAll("[data-step]").forEach((el) => el.addEventListener("click", () => { const [k, d] = el.dataset.step.split("|"); this._step(k, Number(d)); }));
   }
 }
 
 /* ---------- Éditeur visuel ---------- */
 const LABELS = { ...GV_LABELS, title: "Titre", theme: "Thème", entity: "Capteur de la bouteille (%)", kg_entity: "Capteur en kg (facultatif)", capacity_kg: "Contenance de gaz (kg)",
   good_kg: "Niveau « bon » au-dessus de (kg)", low_kg: "Niveau « critique » sous (kg)", history_days: "Jours d'historique pour l'estimation", show_estimate: "Afficher le temps restant estimé",
-  image: "Image de fond (URL, facultatif)", image_opacity: "Opacité de l'image" };
+  image: "Image de fond (URL, facultatif)", image_opacity: "Opacité de l'image",
+  show_settings: "Afficher l'onglet Réglages (calibration de la balance)", weight_entity: "Poids total sur la balance (auto si vide)", tare_button: "Bouton « Tarer plateau vide » (auto si vide)",
+  calib_button: "Bouton « Calibrer avec bouteille vide » (auto si vide)", tare_number: "Réglage tare bouteille (auto si vide)", capacity_number: "Réglage contenance de gaz (auto si vide, prioritaire sur la contenance ci-dessus)" };
 const SCHEMA = [
   { type: "grid", name: "", schema: [{ name: "title", selector: { text: {} } },
     { name: "theme", selector: { select: { mode: "dropdown", options: [{ value: "auto", label: "Automatique" }, { value: "light", label: "Clair" }, { value: "dark", label: "Sombre" }] } } }, ...GV_FIELDS] },
@@ -253,6 +373,13 @@ const SCHEMA = [
   { name: "show_estimate", selector: { boolean: {} } },
   { name: "image", selector: { text: {} } },
   { name: "image_opacity", selector: { number: { min: 0.05, max: 1, step: 0.05, mode: "slider" } } },
+  { type: "expandable", name: "", flatten: true, title: "Onglet Réglages (balance ESPHome)", icon: "mdi:tune-variant", schema: [
+    { name: "show_settings", selector: { boolean: {} } },
+    { name: "weight_entity", selector: { entity: { domain: "sensor" } } },
+    { name: "tare_button", selector: { entity: { domain: "button" } } },
+    { name: "calib_button", selector: { entity: { domain: "button" } } },
+    { name: "tare_number", selector: { entity: { domain: "number" } } },
+    { name: "capacity_number", selector: { entity: { domain: "number" } } }] },
 ];
 
 class GasBottleCardEditor extends HTMLElement {
@@ -267,7 +394,7 @@ class GasBottleCardEditor extends HTMLElement {
     el.addEventListener("value-changed", (ev) => {
       ev.stopPropagation();
       const cfg = { ...ev.detail.value };
-      ["kg_entity", "image"].forEach((k) => { if (cfg[k] === "" || cfg[k] == null) delete cfg[k]; });
+      ["kg_entity", "image", "weight_entity", "tare_button", "calib_button", "tare_number", "capacity_number"].forEach((k) => { if (cfg[k] === "" || cfg[k] == null) delete cfg[k]; });
       this._config = cfg;
       this.dispatchEvent(new CustomEvent("config-changed", { detail: { config: cfg }, bubbles: true, composed: true }));
     });
@@ -278,6 +405,6 @@ class GasBottleCardEditor extends HTMLElement {
 customElements.define("gas-bottle-card", GasBottleCard);
 customElements.define("gas-bottle-card-editor", GasBottleCardEditor);
 window.customCards = window.customCards || [];
-window.customCards.push({ type: "gas-bottle-card", name: "Gas Bottle Card (FR)", description: "Bouteille de gaz pesée : niveau animé, kg restants, temps restant estimé, alerte de mesure incohérente.", preview: true });
+window.customCards.push({ type: "gas-bottle-card", name: "Gas Bottle Card (FR)", description: "Bouteille de gaz pesée : niveau animé, kg restants, temps restant estimé, alerte de mesure incohérente, onglet de calibration de la balance.", preview: true });
 console.info(`%c GAS-BOTTLE-CARD %c v${CARD_VERSION} `, "color:#fff;background:#1f78d1;font-weight:700;border-radius:3px 0 0 3px;padding:2px 4px", "color:#1f78d1;background:#fff;font-weight:700;border-radius:0 3px 3px 0;padding:2px 4px");
 }
