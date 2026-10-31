@@ -5,7 +5,7 @@
  * kilos restants, couleur selon le seuil, estimation du temps restant d'après l'historique et alerte de mesure incohérente.
  * Style verre, thème clair/sombre automatique, éditeur visuel, textes en français.
  */
-const CARD_VERSION = "1.2.0";
+const CARD_VERSION = "1.3.0";
 
 /* === NUANCE COMMUNE v2 (cartes Johan854) ===
  * Bloc identique dans toutes les cartes. Options : nuance, nuance_perso, intensite.
@@ -44,8 +44,8 @@ const DEFAULTS = {
   entity: "",
   kg_entity: "",
   capacity_kg: 6,
-  good_kg: 4,
-  low_kg: 2,
+  low_pct: 30,
+  crit_pct: 10,
   history_days: 14,
   show_estimate: true,
   image: "",
@@ -214,12 +214,12 @@ class GasBottleCard extends HTMLElement {
     if (!c || !h) return;
     const dark = this._isDark();
     const r = this._read();
-    const good = Number(c.good_kg) || 4, low = Number(c.low_kg) || 2;
+    const lowP = isFinite(Number(c.low_pct)) ? Number(c.low_pct) : 30, critP = isFinite(Number(c.crit_pct)) ? Number(c.crit_pct) : 10;
     let lvl = "na", big = "—", sub = "", alert = "", est = "";
     if (r.err === "config") sub = "Choisis le capteur de la bouteille dans l'éditeur.";
     else if (r.err === "off") { sub = "Capteur hors ligne"; alert = `<div class="al warn glass"><ha-icon icon="mdi:wifi-off"></ha-icon><span>Le capteur ne répond pas. Vérifie l'alimentation de la balance.</span></div>`; }
     else {
-      lvl = r.kg >= good ? "ok" : r.kg >= low ? "mid" : "crit";
+      lvl = r.pct > lowP ? "ok" : r.pct > critP ? "mid" : "crit";
       big = Math.round(r.pct) + "<small>%</small>";
       sub = `${fmt(r.kg)} kg de gaz sur ${fmt(r.cap, r.cap % 1 ? 1 : 0)} kg`;
       if (r.incoherent) alert = `<div class="al warn glass"><ha-icon icon="mdi:alert-circle-outline"></ha-icon><span>Mesure incohérente (${fmt(r.pctRaw, 0)} %). Une bouteille ne peut pas dépasser 100 % : vérifie la balance.</span></div>`;
@@ -357,7 +357,7 @@ class GasBottleCard extends HTMLElement {
 
 /* ---------- Éditeur visuel ---------- */
 const LABELS = { ...GV_LABELS, title: "Titre", theme: "Thème", entity: "Capteur de la bouteille (%)", kg_entity: "Capteur en kg (facultatif)", capacity_kg: "Contenance de gaz (kg)",
-  good_kg: "Niveau « bon » au-dessus de (kg)", low_kg: "Niveau « critique » sous (kg)", history_days: "Jours d'historique pour l'estimation", show_estimate: "Afficher le temps restant estimé",
+  low_pct: "Alerte « niveau bas » à partir de (%)", crit_pct: "Alerte « presque vide » à partir de (%)", history_days: "Jours d'historique pour l'estimation", show_estimate: "Afficher le temps restant estimé",
   image: "Image de fond (URL, facultatif)", image_opacity: "Opacité de l'image",
   show_settings: "Afficher l'onglet Réglages (calibration de la balance)", weight_entity: "Poids total sur la balance (auto si vide)", tare_button: "Bouton « Tarer plateau vide » (auto si vide)",
   calib_button: "Bouton « Calibrer avec bouteille vide » (auto si vide)", tare_number: "Réglage tare bouteille (auto si vide)", capacity_number: "Réglage contenance de gaz (auto si vide, prioritaire sur la contenance ci-dessus)" };
@@ -368,8 +368,8 @@ const SCHEMA = [
   { name: "kg_entity", selector: { entity: { domain: "sensor" } } },
   { type: "grid", name: "", schema: [{ name: "capacity_kg", selector: { number: { min: 1, max: 50, step: 0.5, mode: "box" } } },
     { name: "history_days", selector: { number: { min: 2, max: 60, mode: "box" } } },
-    { name: "good_kg", selector: { number: { min: 0, max: 50, step: 0.5, mode: "box" } } },
-    { name: "low_kg", selector: { number: { min: 0, max: 50, step: 0.5, mode: "box" } } }] },
+    { name: "low_pct", selector: { number: { min: 0, max: 100, step: 1, mode: "box", unit_of_measurement: "%" } } },
+    { name: "crit_pct", selector: { number: { min: 0, max: 100, step: 1, mode: "box", unit_of_measurement: "%" } } }] },
   { name: "show_estimate", selector: { boolean: {} } },
   { name: "image", selector: { text: {} } },
   { name: "image_opacity", selector: { number: { min: 0.05, max: 1, step: 0.05, mode: "slider" } } },

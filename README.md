@@ -1,6 +1,6 @@
 # Gas Bottle Card (FR)
 
-Carte Home Assistant pour une bouteille de gaz pesée (balance ESP32 + HX711, ESPHome…) : bouteille illustrée qui se vide, pourcentage, kilos restants, couleur selon le niveau (vert / bleu / rouge), **estimation du temps restant** d'après l'historique et **alerte de mesure incohérente** (valeur hors 0–100 %, capteur hors ligne) et **onglet Réglages** pour tarer et calibrer la balance depuis la carte. Style verre, thème clair/sombre automatique, éditeur visuel, textes en français.
+Carte Home Assistant pour une bouteille de gaz pesée (balance ESP32 + HX711, ESPHome…) : bouteille illustrée qui se vide, pourcentage, kilos restants, couleur selon le niveau en % (vert / bleu / rouge), **estimation du temps restant** d'après l'historique et **alerte de mesure incohérente** (valeur hors 0–100 %, capteur hors ligne) et **onglet Réglages** pour tarer et calibrer la balance depuis la carte. Style verre, thème clair/sombre automatique, éditeur visuel, textes en français.
 
 ## Installation (HACS)
 1. HACS → ⋮ → *Dépôts personnalisés* → `https://github.com/Johan854/gas-bottle-card`, catégorie **Tableau de bord**.
@@ -13,8 +13,8 @@ title: Bouteille de gaz
 entity: sensor.espgaz_gaz        # pourcentage restant
 kg_entity: sensor.espgaz_gaz_restant   # facultatif : kilos restants
 capacity_kg: 5.5                 # contenance de gaz (ignorée si le réglage « Contenance gaz » de l'ESP existe)
-good_kg: 4                       # vert au-dessus
-low_kg: 2                        # rouge en dessous (bleu entre les deux)
+low_pct: 30                      # « niveau bas » (bleu) à partir de 30 %
+crit_pct: 10                     # « presque vide » (rouge) à partir de 10 %
 show_estimate: true
 history_days: 14
 image: /local/gaz/bouteille.jpg  # facultatif, image de fond
@@ -67,5 +67,6 @@ Sans cette ligne, `nuance: theme` garde les couleurs d'origine de la carte.
 
 ## Historique des versions
 
+- **1.3.0** : seuils d'alerte en pourcentage (`low_pct` 30 %, `crit_pct` 10 %) à la place des seuils en kg.
 - **1.2.0** : onglet Réglages (tare, calibration avec confirmation, tare et contenance réglables) ; la contenance suit le réglage de l'ESP s'il existe.
 - **1.1.0** : nuance de couleur au choix (8 nuances, couleur personnalisée, intensité, ou nuance commune via `carte-nuance` dans le thème).
